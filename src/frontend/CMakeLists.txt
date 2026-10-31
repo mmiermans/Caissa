@@ -20,16 +20,19 @@ endif()
 
 # WebAssembly: main() runs in a worker thread and takes commands from UciCommand() (see UCI.cpp).
 # Growing memory with threads only slows JavaScript's access to it, which happens only while
-# loading the net.
+# loading the net. With WASM_THREADS=OFF there is no worker thread: main() returns and each
+# UciCommand() runs its command, a search included, before returning.
 # - node: files are read straight from disk, and NodeStdin.js passes stdin to the engine.
 # - web: an ES module (createCaissa) for a dedicated Web Worker. The host writes the net into the
 #   in-memory file system before main() runs, sends commands with ccall('UciCommand') and reads
 #   the output through print. Threads need a cross-origin isolated page.
 if (EMSCRIPTEN)
-	target_link_options(caissa PRIVATE
-		-sPROXY_TO_PTHREAD -sPTHREAD_POOL_SIZE=4
-		-sALLOW_MEMORY_GROWTH -Wno-pthreads-mem-growth
-		-sSTACK_SIZE=8MB -sDEFAULT_PTHREAD_STACK_SIZE=8MB)
+	target_link_options(caissa PRIVATE -sALLOW_MEMORY_GROWTH -sSTACK_SIZE=8MB)
+	if (WASM_THREADS)
+		target_link_options(caissa PRIVATE
+			-sPROXY_TO_PTHREAD -sPTHREAD_POOL_SIZE=4 -Wno-pthreads-mem-growth
+			-sDEFAULT_PTHREAD_STACK_SIZE=8MB)
+	endif()
 	if (WASM_ENVIRONMENT STREQUAL "web")
 		target_link_options(caissa PRIVATE
 			-sENVIRONMENT=web,worker -sMODULARIZE -sEXPORT_ES6 -sEXPORT_NAME=createCaissa

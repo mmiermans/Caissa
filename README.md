@@ -231,7 +231,7 @@ For browsers, `-DWASM_ENVIRONMENT=web` (makefile: `WASM_ENVIRONMENT=web`, output
 - send commands with `ccall('UciCommand', null, ['string'], [command])`;
 - read the output through `print`.
 
-The engine always searches on its own thread, so the page must be cross-origin isolated (`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`).
+Threads need SharedArrayBuffer, so the page must be cross-origin isolated (`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`). For other pages, `-DWASM_THREADS=OFF` (makefile: `WASM_THREADS=OFF`, output named with `-st`) builds the engine without threads: it searches on one thread, and each `UciCommand` call runs its command before returning. Nothing runs during a search, so `stop` and `isready` are answered after it, `go` needs a limit (depth, nodes, mate, movetime or a clock; `go infinite` is refused), and pondering isn't offered. In a browser, end it by terminating its worker rather than with `quit`.
 
 ---
 
