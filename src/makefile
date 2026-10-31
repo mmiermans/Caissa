@@ -81,17 +81,33 @@ AVX512FLAGS   = $(BMI2FLAGS) -mavx512f -mavx512bw -mavx512dq -DUSE_AVX512
 AVX512ICLFLAGS = $(AVX512FLAGS) -DUSE_VNNI -DUSE_VBMI2
 NEONFLAGS     = $(COMMONFLAGS) -DUSE_ARM_NEON
 
-# WebAssembly, for Node.js (built with Emscripten's em++). The net is not embedded, since INCBIN has
-# no WebAssembly support: the engine reads it from the working directory.
+# WebAssembly (built with Emscripten's em++). The net is not embedded, since INCBIN has no
+# WebAssembly support: the engine reads it from the working directory.
+# WASM_ENVIRONMENT=node (default) runs with Node.js; WASM_ENVIRONMENT=web builds an ES module for a
+# Web Worker, named with -web, whose host writes the net into the in-memory file system (see
+# frontend/CMakeLists.txt). WASM_PROFILING=ON keeps function names for profilers.
 EMXX             = em++
+WASM_ENVIRONMENT ?= node
+ifeq ($(filter $(WASM_ENVIRONMENT),node web),)
+$(error Unknown WASM_ENVIRONMENT: $(WASM_ENVIRONMENT) (node or web))
+endif
 WASMFLAGS        = $(WFLAGS) -std=c++20 -O3 -flto -funroll-loops -fno-rtti -fno-exceptions -fomit-frame-pointer -fno-math-errno -fno-trapping-math -fno-stack-protector \
                    -pthread -DCONFIGURATION_FINAL -DNDEBUG -DCAISSA_VERSION=\"$(VERSION)\" -DCAISSA_DEFAULT_EVALFILE=\"$(notdir $(EVALFILE))\" -DARCHITECTURE_WASM
 WASMSIMDFLAGS    = $(WASMFLAGS) -msimd128 -DUSE_WASM_SIMD
 WASMRELAXEDFLAGS = $(WASMSIMDFLAGS) -mrelaxed-simd -DUSE_WASM_RELAXED_SIMD
-WASMLINKFLAGS    = -sENVIRONMENT=node -sNODERAWFS --pre-js frontend/NodeStdin.js -sEXPORTED_RUNTIME_METHODS=ccall \
-                   -sPROXY_TO_PTHREAD -sPTHREAD_POOL_SIZE=4 -sEXIT_RUNTIME \
-                   -sALLOW_MEMORY_GROWTH -sINITIAL_MEMORY=256MB -sMAXIMUM_MEMORY=4GB -Wno-pthreads-mem-growth \
+WASMLINKFLAGS    = -sPROXY_TO_PTHREAD -sPTHREAD_POOL_SIZE=4 -sALLOW_MEMORY_GROWTH -Wno-pthreads-mem-growth \
                    -sSTACK_SIZE=8MB -sDEFAULT_PTHREAD_STACK_SIZE=8MB
+ifeq ($(WASM_ENVIRONMENT),web)
+	WASMLINKFLAGS += -sENVIRONMENT=web,worker -sMODULARIZE -sEXPORT_ES6 -sEXPORT_NAME=createCaissa \
+	                 -sEXPORTED_RUNTIME_METHODS=ccall,FS -sINITIAL_MEMORY=128MB -sMAXIMUM_MEMORY=2GB
+	WASMSUFFIX     = -web
+else
+	WASMLINKFLAGS += -sENVIRONMENT=node -sNODERAWFS -sEXIT_RUNTIME --pre-js frontend/NodeStdin.js \
+	                 -sEXPORTED_RUNTIME_METHODS=ccall -sINITIAL_MEMORY=256MB -sMAXIMUM_MEMORY=4GB
+endif
+ifeq ($(WASM_PROFILING),ON)
+	WASMLINKFLAGS += --profiling-funcs
+endif
 
 # Native build: ask the compiler which ISA extensions -march=native enables on this host,
 # so the feature defines match the CPU instead of being pinned to a fixed baseline.
@@ -166,11 +182,11 @@ legacy: $(EVALFILE)
 neon: $(EVALFILE)
 	$(CC) $(SRC) -march=armv8-a+simd $(NEONFLAGS) -o $(EXE_NAME)-aarch64-neon$(EXT)
 wasm-simd: $(EVALFILE)
-	$(EMXX) $(SRC) $(WASMSIMDFLAGS) $(WASMLINKFLAGS) -o $(EXE_NAME)-wasm-simd.js
+	$(EMXX) $(SRC) $(WASMSIMDFLAGS) $(WASMLINKFLAGS) -o $(EXE_NAME)-wasm-simd$(WASMSUFFIX).js
 wasm-relaxed: $(EVALFILE)
-	$(EMXX) $(SRC) $(WASMRELAXEDFLAGS) $(WASMLINKFLAGS) -o $(EXE_NAME)-wasm-relaxed.js
+	$(EMXX) $(SRC) $(WASMRELAXEDFLAGS) $(WASMLINKFLAGS) -o $(EXE_NAME)-wasm-relaxed$(WASMSUFFIX).js
 wasm: $(EVALFILE)
-	$(EMXX) $(SRC) $(WASMFLAGS) $(WASMLINKFLAGS) -o $(EXE_NAME)-wasm.js
+	$(EMXX) $(SRC) $(WASMFLAGS) $(WASMLINKFLAGS) -o $(EXE_NAME)-wasm$(WASMSUFFIX).js
 
 # Profile-guided optimization builds
 # native build like ob; phony because the profile directory has the same name

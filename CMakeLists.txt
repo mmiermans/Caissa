@@ -11,6 +11,11 @@ add_compile_definitions(CAISSA_VERSION="${CAISSA_VERSION}")
 
 option(USE_NUMA "Enable NUMA support via libnuma" ON)
 option(WASM_PROFILING "Keep function names in the WebAssembly binary for profilers" OFF)
+set(WASM_ENVIRONMENT "node" CACHE STRING "Where WebAssembly builds run: node or web")
+set_property(CACHE WASM_ENVIRONMENT PROPERTY STRINGS node web)
+if (EMSCRIPTEN AND NOT WASM_ENVIRONMENT MATCHES "^(node|web)$")
+    message(FATAL_ERROR "Unknown WASM_ENVIRONMENT: ${WASM_ENVIRONMENT} (node or web)")
+endif()
 
 if (USE_NUMA AND UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
     # first try to find libnuma via pkg-config
