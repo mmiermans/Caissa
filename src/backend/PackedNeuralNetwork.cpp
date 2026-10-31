@@ -9,7 +9,7 @@ namespace nn {
 
 static_assert(sizeof(PackedNeuralNetwork::Header) % CACHELINE_SIZE == 0, "Network header size must be multiple of cacheline size");
 
-#if defined(USE_AVX2) || defined(USE_AVX512) || defined(USE_SSE4) || defined(USE_ARM_NEON)
+#if defined(USE_AVX2) || defined(USE_AVX512) || defined(USE_SSE4) || defined(USE_ARM_NEON) || defined(USE_WASM_SIMD)
 
 // For each 8-bit mask, the positions of its set bits. Used to append the indices of the non-zero
 // 4-byte L1 input groups to the sparse index list eight at a time.
@@ -50,7 +50,7 @@ INLINE static int32_t LoadInputGroup(const IntermediateType* input, uint32_t gro
     return inputGroup;
 }
 
-#endif // USE_AVX2 || USE_AVX512 || USE_SSE4 || USE_ARM_NEON
+#endif // USE_AVX2 || USE_AVX512 || USE_SSE4 || USE_ARM_NEON || USE_WASM_SIMD
 
 #if defined(USE_AVX2) || defined(USE_AVX512) || defined(USE_SSE4)
 
@@ -653,6 +653,228 @@ INLINE static int32_t HiddenLayerL2_LastLayer(const IntermediateType* input, con
     return subnet.l3Bias + vaddvq_s32(total);
 }
 
+#elif defined(USE_WASM_SIMD)
+
+// Appends the group indices selected by an 8-bit mask, offset by the block's first group index.
+// Always stores 8 entries; the caller's buffer is sized so the extra ones land in unused slots.
+INLINE static void AppendNnzIndices(uint16_t* nnzIndices, uint32_t& nnzCount, uint32_t mask, v128_t groupIndexBase)
+{
+    const v128_t indices = wasm_v128_load(c_nnzIndexTable.indices[mask]);
+    wasm_v128_store(nnzIndices + nnzCount, wasm_i16x8_add(indices, groupIndexBase));
+    nnzCount += PopCount(mask);
+}
+
+// Bit k is set when the k-th 4-byte group of the register is non-zero
+INLINE static uint32_t wasm128_nnzMask(v128_t packed)
+{
+    return wasm_i32x4_bitmask(wasm_i32x4_ne(packed, wasm_i32x4_splat(0)));
+}
+
+// Accumulator registers per 4 outputs. Relaxed SIMD sums each output's 4-byte dot product in one
+// int32 lane. Without it, i32x4.dot_i16x8 sums byte pairs: outputs 0-1 take the lanes of the first
+// register, outputs 2-3 those of the second, and wasm128_groupSums adds the pairs.
+#if defined(USE_WASM_RELAXED_SIMD)
+    static constexpr uint32_t DotRegisters = 1;
+#else
+    static constexpr uint32_t DotRegisters = 2;
+#endif // USE_WASM_RELAXED_SIMD
+
+// An input group broadcast for wasm128_dot. The inputs are at most HiddenActivationMax, so they fit
+// both a signed byte and the 7-bit operand of the relaxed dot product, and its int16 pair sums
+// cannot saturate, which makes its result deterministic. Without relaxed SIMD they are widened to
+// int16 once per group: the 4 bytes repeat across the register, so its low half holds the whole input.
+INLINE static v128_t wasm128_inputGroup(const IntermediateType* input, uint32_t group)
+{
+    const v128_t in = wasm_i32x4_splat(LoadInputGroup(input, group));
+#if defined(USE_WASM_RELAXED_SIMD)
+    return in;
+#else
+    return wasm_i16x8_extend_low_i8x16(in);
+#endif // USE_WASM_RELAXED_SIMD
+}
+
+// Adds the dot products of an input group with a 16-byte weight block (4 int8 weights for each of 4 outputs)
+INLINE static void wasm128_dot(v128_t* sums, v128_t in, const HiddenLayerWeightType* weights)
+{
+    const v128_t w = wasm_v128_load(weights);
+#if defined(USE_WASM_RELAXED_SIMD)
+    sums[0] = wasm_i32x4_relaxed_dot_i8x16_i7x16_add(w, in, sums[0]);
+#else
+    sums[0] = wasm_i32x4_add(sums[0], wasm_i32x4_dot_i16x8(in, wasm_i16x8_extend_low_i8x16(w)));
+    sums[1] = wasm_i32x4_add(sums[1], wasm_i32x4_dot_i16x8(in, wasm_i16x8_extend_high_i8x16(w)));
+#endif // USE_WASM_RELAXED_SIMD
+}
+
+// The int32 sums of 4 outputs from their accumulator registers
+INLINE static v128_t wasm128_groupSums(const v128_t* sums)
+{
+#if defined(USE_WASM_RELAXED_SIMD)
+    return sums[0];
+#else
+    return wasm_i32x4_add(
+        wasm_i32x4_shuffle(sums[0], sums[1], 0, 2, 4, 6),
+        wasm_i32x4_shuffle(sums[0], sums[1], 1, 3, 5, 7));
+#endif // USE_WASM_RELAXED_SIMD
+}
+
+// Two registers of int32 sums -> one register of int16 hidden activations:
+// (sum >> HiddenWeightScaleShift) clamped to [0, HiddenActivationMax]. The narrowing saturation
+// cannot change the clamped result.
+INLINE static v128_t wasm128_requantize(v128_t sumLo, v128_t sumHi)
+{
+    const v128_t packed = wasm_i16x8_narrow_i32x4(
+        wasm_i32x4_shr(sumLo, HiddenWeightScaleShift),
+        wasm_i32x4_shr(sumHi, HiddenWeightScaleShift));
+    return wasm_i16x8_min(wasm_i16x8_max(packed, wasm_i16x8_splat(0)), wasm_i16x8_splat(HiddenActivationMax));
+}
+
+// (a * b) >> PairwiseShift for 8 pairs of factors in [0, QA]. WebAssembly has no multiply-high, but
+// the products fit uint16, so the low half of the product shifted right is exact.
+static_assert(ActivationRangeScaling * ActivationRangeScaling <= UINT16_MAX, "Pairwise products must fit uint16");
+INLINE static v128_t wasm128_pairwiseProduct(v128_t a, v128_t b)
+{
+    return wasm_u16x8_shr(wasm_i16x8_mul(a, b), PairwiseShift);
+}
+
+// Pairwise activation of one accumulator: the two halves are clipped to [0, QA] and multiplied,
+// then shifted back into uint8. Output length is AccumulatorSize/2. Also appends the indices of the
+// non-zero 4-byte output groups to the sparse L1 index list.
+INLINE static void FT_PairwiseCReLU(
+    IntermediateType* output, const AccumulatorType* accumulator,
+    uint16_t* nnzIndices, uint32_t& nnzCount, uint32_t firstGroupIndex)
+{
+    constexpr uint32_t halfSize = AccumulatorSize / 2;
+    const v128_t zero = wasm_i16x8_splat(0);
+    const v128_t maxActivation = wasm_i16x8_splat(ActivationRangeScaling);
+    v128_t groupIndexBase = wasm_i16x8_splat((int16_t)firstGroupIndex);
+
+    // 32 outputs per iteration, so that one 8-bit mask covers the block's 4-byte groups
+    for (uint32_t i = 0; i < halfSize; i += 32)
+    {
+        uint32_t nnzMask = 0;
+        for (uint32_t j = 0; j < 32; j += 16)
+        {
+            v128_t a0 = wasm_v128_load(accumulator + i + j);
+            v128_t a1 = wasm_v128_load(accumulator + i + j + 8);
+            v128_t b0 = wasm_v128_load(accumulator + halfSize + i + j);
+            v128_t b1 = wasm_v128_load(accumulator + halfSize + i + j + 8);
+
+            // Both factors are clamped, so the products fit uint16; a negative second factor gives
+            // zero, as the narrowing would on the other paths
+            a0 = wasm_i16x8_min(wasm_i16x8_max(a0, zero), maxActivation);
+            a1 = wasm_i16x8_min(wasm_i16x8_max(a1, zero), maxActivation);
+            b0 = wasm_i16x8_min(wasm_i16x8_max(b0, zero), maxActivation);
+            b1 = wasm_i16x8_min(wasm_i16x8_max(b1, zero), maxActivation);
+
+            const v128_t packed = wasm_u8x16_narrow_i16x8(wasm128_pairwiseProduct(a0, b0), wasm128_pairwiseProduct(a1, b1));
+            wasm_v128_store(output + i + j, packed);
+
+            nnzMask |= wasm128_nnzMask(packed) << (j / 4);
+        }
+        AppendNnzIndices(nnzIndices, nnzCount, nnzMask, groupIndexBase);
+        groupIndexBase = wasm_i16x8_add(groupIndexBase, wasm_i16x8_splat(8));
+    }
+}
+
+// Adds one L1 input group: its 4 bytes are broadcast against the group's weight block, which holds
+// 4 int8 weights for every output, so the block's four quarters cover outputs 0-3, 4-7, 8-11 and 12-15
+INLINE static void AccumulateL1Group(v128_t (*sums)[DotRegisters], const IntermediateType* input, const HiddenLayerWeightType* weights, uint32_t group)
+{
+    const v128_t in = wasm128_inputGroup(input, group);
+    const HiddenLayerWeightType* w = weights + group * (4 * L1Size);
+    for (uint32_t j = 0; j < 4; ++j)
+    {
+        wasm128_dot(sums[j], in, w + 16 * j);
+    }
+}
+
+// L1 over the non-zero input groups only
+INLINE static void HiddenLayerL1(
+    IntermediateType* output, const IntermediateType* input,
+    const HiddenLayerWeightType* weights, const HiddenLayerBiasType* biases,
+    const uint16_t* nnzIndices, uint32_t nnzCount)
+{
+    static_assert(L1Size == 16, "Invalid L1 size");
+
+    v128_t sums[L1AccumulatorSets][4][DotRegisters];
+    for (uint32_t s = 0; s < L1AccumulatorSets; ++s)
+    {
+        for (uint32_t j = 0; j < 4; ++j)
+        {
+            for (uint32_t r = 0; r < DotRegisters; ++r)
+            {
+                sums[s][j][r] = wasm_i32x4_splat(0);
+            }
+        }
+    }
+
+    uint32_t k = 0;
+    for (; k + L1AccumulatorSets <= nnzCount; k += L1AccumulatorSets)
+    {
+        for (uint32_t s = 0; s < L1AccumulatorSets; ++s)
+        {
+            AccumulateL1Group(sums[s], input, weights, nnzIndices[k + s]);
+        }
+    }
+    for (; k < nnzCount; ++k)
+    {
+        AccumulateL1Group(sums[0], input, weights, nnzIndices[k]);
+    }
+
+    v128_t totals[4];
+    for (uint32_t j = 0; j < 4; ++j)
+    {
+        totals[j] = wasm_v128_load(biases + 4 * j);
+        for (uint32_t s = 0; s < L1AccumulatorSets; ++s)
+        {
+            totals[j] = wasm_i32x4_add(totals[j], wasm128_groupSums(sums[s][j]));
+        }
+    }
+
+    const v128_t activations0 = wasm128_requantize(totals[0], totals[1]);
+    const v128_t activations1 = wasm128_requantize(totals[2], totals[3]);
+    wasm_v128_store(output, wasm_u8x16_narrow_i16x8(activations0, activations1));
+}
+
+// L2 over all four input groups (32 outputs per group block), then L3 on the requantized sums
+INLINE static int32_t HiddenLayerL2_LastLayer(const IntermediateType* input, const PackedNeuralNetwork::OutputSubnetVariant& subnet)
+{
+    static_assert(L1Size == 16, "Invalid L1 size");
+    static_assert(L2Size == 32, "Invalid L2 size");
+
+    v128_t sums[8][DotRegisters];
+    for (uint32_t j = 0; j < 8; ++j)
+    {
+        for (uint32_t r = 0; r < DotRegisters; ++r)
+        {
+            sums[j][r] = wasm_i32x4_splat(0);
+        }
+    }
+
+    for (uint32_t group = 0; group < L1Size / 4; ++group)
+    {
+        const v128_t in = wasm128_inputGroup(input, group);
+        const HiddenLayerWeightType* w = subnet.l2Weights + group * (4 * L2Size);
+        for (uint32_t j = 0; j < 8; ++j)
+        {
+            wasm128_dot(sums[j], in, w + 16 * j);
+        }
+    }
+
+    v128_t total = wasm_i32x4_splat(0);
+    for (uint32_t j = 0; j < 4; ++j)
+    {
+        const v128_t activations = wasm128_requantize(
+            wasm_i32x4_add(wasm_v128_load(subnet.l2Biases + 8 * j), wasm128_groupSums(sums[2 * j])),
+            wasm_i32x4_add(wasm_v128_load(subnet.l2Biases + 8 * j + 4), wasm128_groupSums(sums[2 * j + 1])));
+        total = wasm_i32x4_add(total, wasm_i32x4_dot_i16x8(activations, wasm_v128_load(subnet.l3Weights + 8 * j)));
+    }
+
+    return subnet.l3Bias +
+        wasm_i32x4_extract_lane(total, 0) + wasm_i32x4_extract_lane(total, 1) +
+        wasm_i32x4_extract_lane(total, 2) + wasm_i32x4_extract_lane(total, 3);
+}
+
 #else // no SIMD support
 
 // Pairwise activation of one accumulator: the two halves are clipped to [0, QA] and multiplied,
@@ -791,7 +1013,7 @@ int32_t PackedNeuralNetwork::Run(const Accumulator& stmAccum, const Accumulator&
     alignas(CACHELINE_SIZE) IntermediateType l1Input[L1InputSize];
     alignas(CACHELINE_SIZE) IntermediateType l2Input[L1Size];
 
-#if defined(USE_AVX2) || defined(USE_AVX512) || defined(USE_SSE4) || defined(USE_ARM_NEON)
+#if defined(USE_AVX2) || defined(USE_AVX512) || defined(USE_SSE4) || defined(USE_ARM_NEON) || defined(USE_WASM_SIMD)
 
     // Indices of the non-zero 4-byte groups of l1Input. Every block of 8 groups (16 with VBMI2) stores one
     // entry per group starting at the running count, which never exceeds the block's own first slot, so

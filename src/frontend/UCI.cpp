@@ -35,6 +35,10 @@
 #define ArchitectureStr "POPCNT"
 #elif defined(USE_ARM_NEON) 
 #define ArchitectureStr "ARM NEON"
+#elif defined(USE_WASM_RELAXED_SIMD)
+#define ArchitectureStr "WASM relaxed SIMD"
+#elif defined(USE_WASM_SIMD)
+#define ArchitectureStr "WASM SIMD"
 #elif defined(ARCHITECTURE_WASM)
 #define ArchitectureStr "WASM"
 #else

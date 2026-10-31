@@ -13,6 +13,10 @@
     #include <immintrin.h>
 #endif
 
+#ifdef USE_WASM_SIMD
+    #include <wasm_simd128.h>
+#endif // USE_WASM_SIMD
+
 inline void* AlignedMalloc(size_t size, size_t alignment)
 {
     void* ptr = nullptr;
@@ -72,6 +76,13 @@ INLINE void AlignedMemcpy64(T* dst, const T* src)
     for (size_t i = 0; i < size / 16u; i++)
     {
         _mm_store_si128(dst128 + i, _mm_load_si128(src128 + i));
+    }
+#elif defined(USE_WASM_SIMD)
+    const v128_t* src128 = reinterpret_cast<const v128_t*>(src);
+    v128_t* dst128 = reinterpret_cast<v128_t*>(dst);
+    for (size_t i = 0; i < size / 16u; i++)
+    {
+        wasm_v128_store(dst128 + i, wasm_v128_load(src128 + i));
     }
 #else
     memcpy(static_cast<void*>(dst), static_cast<const void*>(src), size);

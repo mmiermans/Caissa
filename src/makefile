@@ -86,6 +86,8 @@ NEONFLAGS     = $(COMMONFLAGS) -DUSE_ARM_NEON
 EMXX             = em++
 WASMFLAGS        = $(WFLAGS) -std=c++20 -O3 -flto -funroll-loops -fno-rtti -fno-exceptions -fomit-frame-pointer -fno-math-errno -fno-trapping-math -fno-stack-protector \
                    -pthread -DCONFIGURATION_FINAL -DNDEBUG -DCAISSA_VERSION=\"$(VERSION)\" -DCAISSA_DEFAULT_EVALFILE=\"$(notdir $(EVALFILE))\" -DARCHITECTURE_WASM
+WASMSIMDFLAGS    = $(WASMFLAGS) -msimd128 -DUSE_WASM_SIMD
+WASMRELAXEDFLAGS = $(WASMSIMDFLAGS) -mrelaxed-simd -DUSE_WASM_RELAXED_SIMD
 WASMLINKFLAGS    = -sENVIRONMENT=node -sNODERAWFS --pre-js frontend/NodeStdin.js -sEXPORTED_RUNTIME_METHODS=ccall \
                    -sPROXY_TO_PTHREAD -sPTHREAD_POOL_SIZE=4 -sEXIT_RUNTIME \
                    -sALLOW_MEMORY_GROWTH -sINITIAL_MEMORY=256MB -sMAXIMUM_MEMORY=4GB -Wno-pthreads-mem-growth \
@@ -163,6 +165,10 @@ legacy: $(EVALFILE)
 	$(CC) $(SRC) -march=core2 $(SSE2FLAGS) -o $(EXE_NAME)-x64-legacy$(EXT)
 neon: $(EVALFILE)
 	$(CC) $(SRC) -march=armv8-a+simd $(NEONFLAGS) -o $(EXE_NAME)-aarch64-neon$(EXT)
+wasm-simd: $(EVALFILE)
+	$(EMXX) $(SRC) $(WASMSIMDFLAGS) $(WASMLINKFLAGS) -o $(EXE_NAME)-wasm-simd.js
+wasm-relaxed: $(EVALFILE)
+	$(EMXX) $(SRC) $(WASMRELAXEDFLAGS) $(WASMLINKFLAGS) -o $(EXE_NAME)-wasm-relaxed.js
 wasm: $(EVALFILE)
 	$(EMXX) $(SRC) $(WASMFLAGS) $(WASMLINKFLAGS) -o $(EXE_NAME)-wasm.js
 

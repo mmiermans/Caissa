@@ -16,11 +16,11 @@ Build types:
 - `Release` – development: asserts on, optimizations on
 - `Debug` – development: asserts on, optimizations off
 
-Architecture (default is `x64-bmi2` on x86-64, `wasm` with emcmake):
+Architecture (default is `x64-bmi2` on x86-64, `wasm-simd` with emcmake):
 ```bash
 cmake -DTARGET_ARCH=x64-avx512 -DCMAKE_BUILD_TYPE=Final ..
 # Other options: x64-bmi2, x64-avx2, x64-sse4-popcnt, x64-legacy, aarch64-neon, aarch64,
-# wasm (with emcmake)
+# wasm-simd, wasm-relaxed, wasm (with emcmake)
 ```
 
 ### Linux (Makefile – quick, builds AVX2/BMI2)
@@ -101,7 +101,7 @@ CUDA trainer is optional: auto-detected by CMake; compiled only when CUDA Toolki
 
 ### Build configuration defines
 - `CONFIGURATION_DEBUG` / `CONFIGURATION_RELEASE` / `CONFIGURATION_FINAL` – set by CMake per build type
-- SIMD capability defines: `USE_SSE`, `USE_SSE2`, `USE_SSE4`, `USE_POPCNT`, `USE_AVX`, `USE_AVX2`, `USE_BMI2`, `USE_AVX512`, `USE_ARM_NEON`
+- SIMD capability defines: `USE_SSE`, `USE_SSE2`, `USE_SSE4`, `USE_POPCNT`, `USE_AVX`, `USE_AVX2`, `USE_BMI2`, `USE_AVX512`, `USE_ARM_NEON`, `USE_WASM_SIMD`, `USE_WASM_RELAXED_SIMD`
 - Architecture: `ARCHITECTURE_X64`, `ARCHITECTURE_AARCH64` or `ARCHITECTURE_WASM`
 - Always guard SIMD code with the appropriate `#ifdef USE_*` / `#ifdef NN_USE_*` blocks
 
