@@ -6,6 +6,12 @@
 #include "../backend/TimeManager.hpp"
 #include "../backend/Tuning.hpp"
 
+#if defined(__EMSCRIPTEN__)
+    #include <emscripten/emscripten.h>
+    #include <condition_variable>
+    #include <deque>
+#endif // __EMSCRIPTEN__
+
 #ifndef CAISSA_VERSION
 #define CAISSA_VERSION "unknown"
 #endif // CAISSA_VERSION
@@ -22,6 +28,8 @@
 #define ArchitectureStr "POPCNT"
 #elif defined(USE_ARM_NEON) 
 #define ArchitectureStr "ARM NEON"
+#elif defined(ARCHITECTURE_WASM)
+#define ArchitectureStr "WASM"
 #else
 #define ArchitectureStr "legacy"
 #endif
@@ -80,6 +88,34 @@ UniversalChessInterface::~UniversalChessInterface()
     StopSearchThread();
 }
 
+#if defined(__EMSCRIPTEN__)
+
+// WebAssembly hosts (Node.js, browsers) pass commands in with UciCommand() instead of stdin: a
+// blocking read would tie up the JavaScript thread that the output of every thread goes through.
+static std::mutex s_commandsMutex;
+static std::condition_variable s_commandsCondition;
+static std::deque<std::string> s_commands;
+
+extern "C" EMSCRIPTEN_KEEPALIVE void UciCommand(const char* command)
+{
+    {
+        std::lock_guard<std::mutex> lock(s_commandsMutex);
+        s_commands.emplace_back(command);
+    }
+    s_commandsCondition.notify_one();
+}
+
+static bool ReceiveCommand(std::string& command)
+{
+    std::unique_lock<std::mutex> lock(s_commandsMutex);
+    s_commandsCondition.wait(lock, [] { return !s_commands.empty(); });
+    command = std::move(s_commands.front());
+    s_commands.pop_front();
+    return true;
+}
+
+#endif // __EMSCRIPTEN__
+
 void UniversalChessInterface::Loop(int argc, const char* argv[])
 {
     for (int i = 1; i < argc; ++i)
@@ -113,7 +149,11 @@ void UniversalChessInterface::Loop(int argc, const char* argv[])
 
     std::string str;
 
+#if defined(__EMSCRIPTEN__)
+    while (ReceiveCommand(str))
+#else
     while (std::getline(std::cin, str))
+#endif // __EMSCRIPTEN__
     {
         if (!ExecuteCommand(str))
         {

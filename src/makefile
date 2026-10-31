@@ -81,6 +81,16 @@ AVX512FLAGS   = $(BMI2FLAGS) -mavx512f -mavx512bw -mavx512dq -DUSE_AVX512
 AVX512ICLFLAGS = $(AVX512FLAGS) -DUSE_VNNI -DUSE_VBMI2
 NEONFLAGS     = $(COMMONFLAGS) -DUSE_ARM_NEON
 
+# WebAssembly, for Node.js (built with Emscripten's em++). The net is not embedded, since INCBIN has
+# no WebAssembly support: the engine reads it from the working directory.
+EMXX             = em++
+WASMFLAGS        = $(WFLAGS) -std=c++20 -O3 -flto -funroll-loops -fno-rtti -fno-exceptions -fomit-frame-pointer -fno-math-errno -fno-trapping-math -fno-stack-protector \
+                   -pthread -DCONFIGURATION_FINAL -DNDEBUG -DCAISSA_VERSION=\"$(VERSION)\" -DARCHITECTURE_WASM
+WASMLINKFLAGS    = -sENVIRONMENT=node -sNODERAWFS --pre-js frontend/NodeStdin.js -sEXPORTED_RUNTIME_METHODS=ccall \
+                   -sPROXY_TO_PTHREAD -sPTHREAD_POOL_SIZE=4 -sEXIT_RUNTIME \
+                   -sALLOW_MEMORY_GROWTH -sINITIAL_MEMORY=256MB -sMAXIMUM_MEMORY=4GB -Wno-pthreads-mem-growth \
+                   -sSTACK_SIZE=8MB -sDEFAULT_PTHREAD_STACK_SIZE=8MB
+
 # Native build: ask the compiler which ISA extensions -march=native enables on this host,
 # so the feature defines match the CPU instead of being pinned to a fixed baseline.
 ifeq ($(shell echo "test"), "test")
@@ -153,6 +163,8 @@ legacy: $(EVALFILE)
 	$(CC) $(SRC) -march=core2 $(SSE2FLAGS) -o $(EXE_NAME)-x64-legacy$(EXT)
 neon: $(EVALFILE)
 	$(CC) $(SRC) -march=armv8-a+simd $(NEONFLAGS) -o $(EXE_NAME)-aarch64-neon$(EXT)
+wasm: $(EVALFILE)
+	$(EMXX) $(SRC) $(WASMFLAGS) $(WASMLINKFLAGS) -o $(EXE_NAME)-wasm.js
 
 # Profile-guided optimization builds
 # native build like ob; phony because the profile directory has the same name
