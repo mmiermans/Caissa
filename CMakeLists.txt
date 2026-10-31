@@ -10,8 +10,9 @@ add_compile_definitions(CAISSA_VERSION="${CAISSA_VERSION}")
 
 
 option(USE_NUMA "Enable NUMA support via libnuma" ON)
+option(WASM_PROFILING "Keep function names in the WebAssembly binary for profilers" OFF)
 
-if (USE_NUMA AND UNIX AND NOT APPLE)
+if (USE_NUMA AND UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
     # first try to find libnuma via pkg-config
     find_package(PkgConfig QUIET)
     if (PkgConfig_FOUND)
@@ -75,7 +76,9 @@ set_property(DIRECTORY APPEND PROPERTY COMPILE_DEFINITIONS
 
 # detect target architecture if not defined
 if (NOT DEFINED TARGET_ARCH)
-    if (CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
+    if (EMSCRIPTEN)
+        set(TARGET_ARCH "wasm")
+    elseif (CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
         set(TARGET_ARCH "x64-bmi2")
     elseif (CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64")
         set(TARGET_ARCH "x64-bmi2")
@@ -133,12 +136,27 @@ elseif (TARGET_ARCH STREQUAL "aarch64-neon")
     add_definitions(-DARCHITECTURE_AARCH64)
     add_definitions(-DUSE_ARM_NEON)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8-a+simd")
+elseif (TARGET_ARCH STREQUAL "wasm")
+    add_definitions(-DARCHITECTURE_WASM)
 else()
     message(FATAL_ERROR "Unknown target architecture: ${TARGET_ARCH}")
 endif()
 
+if (EMSCRIPTEN AND NOT TARGET_ARCH MATCHES "^wasm")
+    message(FATAL_ERROR "Emscripten builds need a WebAssembly target: wasm")
+endif()
+if (TARGET_ARCH MATCHES "^wasm" AND NOT EMSCRIPTEN)
+    message(FATAL_ERROR "WebAssembly targets are built with Emscripten (emcmake cmake ...)")
+endif()
+
 message(STATUS "Current architecture: ${TARGET_ARCH}")
 
+
+# WebAssembly threads need every object compiled for shared memory
+if (EMSCRIPTEN)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pthread")
+endif()
 
 # set C/C++ standards
 set(CMAKE_CXX_STANDARD 20)
@@ -153,6 +171,12 @@ if (MSVC)
     set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} /DDEBUG /Od /Zi")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /O2 /Oy /GS- /Zi")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /DDEBUG /Od /Zi")
+elseif (EMSCRIPTEN)
+    # no -g: DWARF limits Binaryen's optimizations at link time
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3")
+    set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O0 -g")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -g")
 else()
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O3 -g")
     set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O0 -g")

@@ -137,6 +137,7 @@ The same variant names are used for the release binaries and for the CMake `TARG
 | **Legacy** | `x64-legacy` | x64 + SSE2 only | Very old x64 CPUs |
 | **NEON** | `aarch64-neon` | ARMv8-A + NEON | Modern ARM hardware |
 | **AArch64** | `aarch64` | ARMv8-A | ARM without NEON intrinsics |
+| **WASM** | `wasm` | WebAssembly | Node.js and other WebAssembly runtimes — *default with Emscripten* |
 
 > **Note**: The Makefile additionally provides a `-march=native` default build, which is tuned for the host CPU.
 
@@ -162,7 +163,7 @@ cd src
 make -j$(nproc)
 ```
 
-> **Note**: The default goal (`ob`, used by OpenBench) builds with `-march=native`, tuned for the host CPU. For a portable binary pick an explicit target: `bmi2`, `avx512`, `avx2`, `avx2-vnni`, `sse4`, `sse2`, `legacy`, `release` (builds all of them), or the PGO variants `bmi2_pgo`, `avx2_pgo`, `avx512_pgo`.
+> **Note**: The default goal (`ob`, used by OpenBench) builds with `-march=native`, tuned for the host CPU. For a portable binary pick an explicit target: `bmi2`, `avx512`, `avx2`, `avx2-vnni`, `sse4`, `sse2`, `legacy`, `release` (builds all of them), or the PGO variants `bmi2_pgo`, `avx2_pgo`, `avx512_pgo`. For WebAssembly (with Emscripten): `wasm`.
 > Pass `EVALFILE=<path>` to build against a local network file instead of downloading one.
 
 #### Using CMake
@@ -178,7 +179,7 @@ make -j$(nproc)
 - `Release` — development build, asserts on, optimizations on
 - `Debug` — development build, asserts on, optimizations off
 
-**Architecture selection** — pass `TARGET_ARCH` with any name from the [Architecture Variants](#architecture-variants) table (defaults to `x64-bmi2` on x86-64, `aarch64-neon` on ARM):
+**Architecture selection** — pass `TARGET_ARCH` with any name from the [Architecture Variants](#architecture-variants) table (defaults to `x64-bmi2` on x86-64, `aarch64-neon` on ARM, `wasm` with Emscripten):
 
 ```bash
 cmake -DTARGET_ARCH=x64-avx512 -DCMAKE_BUILD_TYPE=Final ..
@@ -207,6 +208,19 @@ make -j$(nproc)
 ```
 
 Use `-DTARGET_ARCH=aarch64` for a build without NEON intrinsics.
+
+### WebAssembly
+
+Build with [Emscripten](https://emscripten.org) and run with Node.js. The engine reads the net file from the working directory: CMake copies it next to the binary; for the makefile target (same name), copy `data/neuralNets/<net>.pnn` there.
+
+```bash
+mkdir build && cd build
+emcmake cmake -DTARGET_ARCH=wasm -DCMAKE_BUILD_TYPE=Final ..
+make -j$(nproc)
+cd bin && node caissa.js bench
+```
+
+`-DWASM_PROFILING=ON` keeps function names in the binary for profilers.
 
 ---
 

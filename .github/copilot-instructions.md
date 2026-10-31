@@ -16,10 +16,11 @@ Build types:
 - `Release` – development: asserts on, optimizations on
 - `Debug` – development: asserts on, optimizations off
 
-Architecture (default is `x64-bmi2` on x86-64):
+Architecture (default is `x64-bmi2` on x86-64, `wasm` with emcmake):
 ```bash
 cmake -DTARGET_ARCH=x64-avx512 -DCMAKE_BUILD_TYPE=Final ..
-# Other options: x64-bmi2, x64-avx2, x64-sse4-popcnt, x64-legacy, aarch64-neon, aarch64
+# Other options: x64-bmi2, x64-avx2, x64-sse4-popcnt, x64-legacy, aarch64-neon, aarch64,
+# wasm (with emcmake)
 ```
 
 ### Linux (Makefile – quick, builds AVX2/BMI2)
@@ -49,7 +50,7 @@ Neural network files (`.pnn`) are **not stored in this repository**. They are ho
 - **Makefile**: automatically downloads the net to `data/neuralNets/` via `curl` before compilation (required for INCBIN embedding). No manual steps needed.
 - **`data/neuralNets/*.pnn` is in `.gitignore`** — never commit net files to this repo.
 
-To update to a new net version, change `NET_VERSION` in `CMakeLists.txt` and in `src/makefile`. CMake passes the file name to `Evaluate.cpp` as `CAISSA_DEFAULT_EVALFILE`; makefile builds embed the net instead.
+To update to a new net version, change `NET_VERSION` in `CMakeLists.txt` and in `src/makefile`. CMake passes the file name to `Evaluate.cpp` as `CAISSA_DEFAULT_EVALFILE`; native makefile builds embed the net instead, and WebAssembly makefile builds pass its file name like CMake.
 
 ---
 
@@ -101,7 +102,7 @@ CUDA trainer is optional: auto-detected by CMake; compiled only when CUDA Toolki
 ### Build configuration defines
 - `CONFIGURATION_DEBUG` / `CONFIGURATION_RELEASE` / `CONFIGURATION_FINAL` – set by CMake per build type
 - SIMD capability defines: `USE_SSE`, `USE_SSE2`, `USE_SSE4`, `USE_POPCNT`, `USE_AVX`, `USE_AVX2`, `USE_BMI2`, `USE_AVX512`, `USE_ARM_NEON`
-- Architecture: `ARCHITECTURE_X64` or `ARCHITECTURE_AARCH64`
+- Architecture: `ARCHITECTURE_X64`, `ARCHITECTURE_AARCH64` or `ARCHITECTURE_WASM`
 - Always guard SIMD code with the appropriate `#ifdef USE_*` / `#ifdef NN_USE_*` blocks
 
 ### Types and constants (defined in `Common.hpp` / `Score.hpp`)

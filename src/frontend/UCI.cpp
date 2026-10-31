@@ -15,6 +15,10 @@
 #include <string.h>
 #include <thread>
 
+#if defined(__EMSCRIPTEN__)
+    #include <emscripten/emscripten.h>
+#endif // __EMSCRIPTEN__
+
 #ifndef CAISSA_VERSION
 #define CAISSA_VERSION "unknown"
 #endif // CAISSA_VERSION
@@ -31,6 +35,8 @@
 #define ArchitectureStr "POPCNT"
 #elif defined(USE_ARM_NEON) 
 #define ArchitectureStr "ARM NEON"
+#elif defined(ARCHITECTURE_WASM)
+#define ArchitectureStr "WASM"
 #else
 #define ArchitectureStr "legacy"
 #endif
@@ -73,7 +79,27 @@ struct UniversalChessInterface::SearchThread
     std::condition_variable newSearchConditionVariable;
 };
 
+#if defined(__EMSCRIPTEN__)
+
+// WebAssembly hosts (Node.js, browsers) pass commands in with UciCommand() instead of stdin: a
+// blocking read would tie up the JavaScript thread that the output of every thread goes through.
+static std::mutex s_commandsMutex;
+static std::condition_variable s_commandsCondition;
+static DynArray<String> s_commands;
+
+extern "C" EMSCRIPTEN_KEEPALIVE void UciCommand(const char* command)
+{
+    {
+        std::lock_guard<std::mutex> lock(s_commandsMutex);
+        s_commands.PushBack(String(command));
+    }
+    s_commandsCondition.notify_one();
+}
+
+#endif // __EMSCRIPTEN__
+
 // reads a line from stdin without the line terminator, returns false at the end of input
+// (WebAssembly: waits for the next command from UciCommand())
 static bool ReadLine(String& outLine)
 {
     // stdout is fully buffered when a GUI reads it through a pipe: send the replies before waiting for a command
@@ -81,6 +107,13 @@ static bool ReadLine(String& outLine)
 
     outLine.Clear();
 
+#if defined(__EMSCRIPTEN__)
+    std::unique_lock<std::mutex> lock(s_commandsMutex);
+    s_commandsCondition.wait(lock, [] { return !s_commands.Empty(); });
+    outLine = MoveTemp(s_commands.Front());
+    s_commands.Erase(0);
+    return true;
+#else
     char buffer[4096];
     bool readAnything = false;
     while (fgets(buffer, sizeof(buffer), stdin))
@@ -94,6 +127,7 @@ static bool ReadLine(String& outLine)
     }
 
     return readAnything;
+#endif // __EMSCRIPTEN__
 }
 
 UniversalChessInterface::UniversalChessInterface()
