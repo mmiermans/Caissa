@@ -74,7 +74,7 @@ INLINE void AlignedMemcpy64(T* dst, const T* src)
         _mm_store_si128(dst128 + i, _mm_load_si128(src128 + i));
     }
 #else
-    memcpy(dst, src, size);
+    memcpy(static_cast<void*>(dst), static_cast<const void*>(src), size);
 #endif
 }
 
