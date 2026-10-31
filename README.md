@@ -225,6 +225,14 @@ cd bin && node caissa.js bench
 Use `-DTARGET_ARCH=wasm-relaxed` to also use relaxed SIMD, or `-DTARGET_ARCH=wasm` for a build without SIMD.
 `-DWASM_PROFILING=ON` keeps function names in the binary for profilers.
 
+For browsers, `-DWASM_ENVIRONMENT=web` (makefile: `WASM_ENVIRONMENT=web`, output named with `-web`) builds an ES module, `createCaissa`, to run in a dedicated Web Worker:
+
+- write the net into the in-memory file system before `main()` runs (`preRun` with `FS.writeFile`);
+- send commands with `ccall('UciCommand', null, ['string'], [command])`;
+- read the output through `print`.
+
+The engine always searches on its own thread, so the page must be cross-origin isolated (`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`).
+
 ---
 
 ## Custom Commands
