@@ -25,7 +25,7 @@ struct alignas(CACHELINE_SIZE) Accumulator
         }
 #endif // CONFIGURATION_FINAL
 
-#if defined(NN_USE_AVX512) || defined(NN_USE_AVX2) || defined(NN_USE_SSE2) || defined(NN_USE_ARM_NEON)
+#if defined(NN_USE_AVX512) || defined(NN_USE_AVX2) || defined(NN_USE_SSE2) || defined(NN_USE_ARM_NEON) || defined(NN_USE_WASM_SIMD)
 
         constexpr uint32_t registerWidth = VectorRegSize / (8 * sizeof(AccumulatorType));
         static_assert(AccumulatorSize % registerWidth == 0);
@@ -104,7 +104,7 @@ struct alignas(CACHELINE_SIZE) Accumulator
         uint32_t numAddedFeatures, const uint16_t* addedFeatures,
         uint32_t numRemovedFeatures, const uint16_t* removedFeatures)
     {
-#if defined(NN_USE_AVX512) || defined(NN_USE_AVX2) || defined(NN_USE_SSE2) || defined(NN_USE_ARM_NEON)
+#if defined(NN_USE_AVX512) || defined(NN_USE_AVX2) || defined(NN_USE_SSE2) || defined(NN_USE_ARM_NEON) || defined(NN_USE_WASM_SIMD)
 
         constexpr uint32_t registerWidth = VectorRegSize / (8 * sizeof(AccumulatorType));
         static_assert(AccumulatorSize % registerWidth == 0);

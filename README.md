@@ -98,7 +98,7 @@ Caissa consistently ranks among the top chess engines on major rating lists:
 - **Pairwise Activation**: the two halves of each accumulator are clipped and multiplied together, giving 768 values per perspective
 - **Output Network**: `1536 → 16 → 32 → 1`, int8 weights and clipped ReLU in the hidden layers; 8 variants of the whole output network, selected by piece count
 - **Sparse Inference** — the first hidden layer skips all-zero input groups; accumulator neurons are reordered (`utils permuteNet`) so that more groups are zero
-- **Vectorized Code** — hand-written SIMD for AVX-512 (with optional VNNI and VBMI2), AVX2 (with optional VNNI), SSE4 and ARM NEON, plus a scalar fallback
+- **Vectorized Code** — hand-written SIMD for AVX-512 (with optional VNNI and VBMI2), AVX2 (with optional VNNI), SSE4, ARM NEON and WebAssembly SIMD (with optional relaxed SIMD), plus a scalar fallback
 
 ### Training
 
@@ -137,7 +137,9 @@ The same variant names are used for the release binaries and for the CMake `TARG
 | **Legacy** | `x64-legacy` | x64 + SSE2 only | Very old x64 CPUs |
 | **NEON** | `aarch64-neon` | ARMv8-A + NEON | Modern ARM hardware |
 | **AArch64** | `aarch64` | ARMv8-A | ARM without NEON intrinsics |
-| **WASM** | `wasm` | WebAssembly | Node.js and other WebAssembly runtimes — *default with Emscripten* |
+| **WASM relaxed SIMD** | `wasm-relaxed` | WebAssembly SIMD + relaxed SIMD | Node.js, Chrome, Firefox |
+| **WASM SIMD** | `wasm-simd` | WebAssembly SIMD | Any current WebAssembly runtime — *default with Emscripten* |
+| **WASM** | `wasm` | WebAssembly | WebAssembly without SIMD |
 
 > **Note**: The Makefile additionally provides a `-march=native` default build, which is tuned for the host CPU.
 
@@ -163,7 +165,7 @@ cd src
 make -j$(nproc)
 ```
 
-> **Note**: The default goal (`ob`, used by OpenBench) builds with `-march=native`, tuned for the host CPU. For a portable binary pick an explicit target: `bmi2`, `avx512`, `avx2`, `avx2-vnni`, `sse4`, `sse2`, `legacy`, `release` (builds all of them), or the PGO variants `bmi2_pgo`, `avx2_pgo`, `avx512_pgo`. For WebAssembly (with Emscripten): `wasm`.
+> **Note**: The default goal (`ob`, used by OpenBench) builds with `-march=native`, tuned for the host CPU. For a portable binary pick an explicit target: `bmi2`, `avx512`, `avx2`, `avx2-vnni`, `sse4`, `sse2`, `legacy`, `release` (builds all of them), or the PGO variants `bmi2_pgo`, `avx2_pgo`, `avx512_pgo`. For WebAssembly (with Emscripten): `wasm-simd`, `wasm-relaxed`, `wasm`.
 > Pass `EVALFILE=<path>` to build against a local network file instead of downloading one.
 
 #### Using CMake
@@ -179,7 +181,7 @@ make -j$(nproc)
 - `Release` — development build, asserts on, optimizations on
 - `Debug` — development build, asserts on, optimizations off
 
-**Architecture selection** — pass `TARGET_ARCH` with any name from the [Architecture Variants](#architecture-variants) table (defaults to `x64-bmi2` on x86-64, `aarch64-neon` on ARM, `wasm` with Emscripten):
+**Architecture selection** — pass `TARGET_ARCH` with any name from the [Architecture Variants](#architecture-variants) table (defaults to `x64-bmi2` on x86-64, `aarch64-neon` on ARM, `wasm-simd` with Emscripten):
 
 ```bash
 cmake -DTARGET_ARCH=x64-avx512 -DCMAKE_BUILD_TYPE=Final ..
@@ -211,15 +213,16 @@ Use `-DTARGET_ARCH=aarch64` for a build without NEON intrinsics.
 
 ### WebAssembly
 
-Build with [Emscripten](https://emscripten.org) and run with Node.js. The engine reads the net file from the working directory: CMake copies it next to the binary; for the makefile target (same name), copy `data/neuralNets/<net>.pnn` there.
+Build with [Emscripten](https://emscripten.org) and run with Node.js. The engine reads the net file from the working directory: CMake copies it next to the binary; for the makefile targets (same names), copy `data/neuralNets/<net>.pnn` there.
 
 ```bash
 mkdir build && cd build
-emcmake cmake -DTARGET_ARCH=wasm -DCMAKE_BUILD_TYPE=Final ..
+emcmake cmake -DTARGET_ARCH=wasm-simd -DCMAKE_BUILD_TYPE=Final ..
 make -j$(nproc)
 cd bin && node caissa.js bench
 ```
 
+Use `-DTARGET_ARCH=wasm-relaxed` to also use relaxed SIMD, or `-DTARGET_ARCH=wasm` for a build without SIMD.
 `-DWASM_PROFILING=ON` keeps function names in the binary for profilers.
 
 ---

@@ -21,6 +21,10 @@
     #include <arm_neon.h>
 #endif // USE_ARM_NEON
 
+#ifdef USE_WASM_SIMD
+    #include <wasm_simd128.h>
+#endif // USE_WASM_SIMD
+
 namespace nn {
 
 #ifdef USE_VNNI
@@ -63,7 +67,16 @@ namespace nn {
     #define Int16VecAdd vaddq_s16
     #define Int16VecSub vsubq_s16
 
-#endif // USE_ARM_NEON
+#elif defined(USE_WASM_SIMD)
+    #define NN_USE_WASM_SIMD
+    using Int16VecType = v128_t;
+    constexpr const uint32_t VectorRegSize = 128;
+    #define Int16VecLoad(ptr) wasm_v128_load(ptr)
+    #define Int16VecStore(ptr,val) wasm_v128_store((ptr), (val))
+    #define Int16VecAdd wasm_i16x8_add
+    #define Int16VecSub wasm_i16x8_sub
+
+#endif // USE_WASM_SIMD
 
 #ifdef USE_SSE4
     #define NN_USE_SSE4
@@ -71,9 +84,9 @@ namespace nn {
 
 #if defined(NN_USE_AVX512)
     constexpr uint32_t OptimalRegisterCount = 16;
-#elif defined(NN_USE_AVX2) || defined(NN_USE_SSE2) || defined(NN_USE_ARM_NEON)
+#elif defined(NN_USE_AVX2) || defined(NN_USE_SSE2) || defined(NN_USE_ARM_NEON) || defined(NN_USE_WASM_SIMD)
     constexpr uint32_t OptimalRegisterCount = 8;
-#endif // NN_USE_AVX512 || NN_USE_AVX2 || NN_USE_SSE2 || NN_USE_ARM_NEON
+#endif // NN_USE_AVX512 || NN_USE_AVX2 || NN_USE_SSE2 || NN_USE_ARM_NEON || NN_USE_WASM_SIMD
 
 
 class NeuralNetwork;
