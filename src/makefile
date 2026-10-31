@@ -85,18 +85,28 @@ NEONFLAGS     = $(COMMONFLAGS) -DUSE_ARM_NEON
 # WebAssembly support: the engine reads it from the working directory.
 # WASM_ENVIRONMENT=node (default) runs with Node.js; WASM_ENVIRONMENT=web builds an ES module for a
 # Web Worker, named with -web, whose host writes the net into the in-memory file system (see
-# frontend/CMakeLists.txt). WASM_PROFILING=ON keeps function names for profilers.
+# frontend/CMakeLists.txt). WASM_THREADS=OFF builds without threads, named with -st: it needs no
+# SharedArrayBuffer and searches on one thread. WASM_PROFILING=ON keeps function names for profilers.
 EMXX             = em++
 WASM_ENVIRONMENT ?= node
+WASM_THREADS     ?= ON
 ifeq ($(filter $(WASM_ENVIRONMENT),node web),)
 $(error Unknown WASM_ENVIRONMENT: $(WASM_ENVIRONMENT) (node or web))
 endif
+ifeq ($(filter $(WASM_THREADS),ON OFF),)
+$(error Unknown WASM_THREADS: $(WASM_THREADS) (ON or OFF))
+endif
 WASMFLAGS        = $(WFLAGS) -std=c++20 -O3 -flto -funroll-loops -fno-rtti -fno-exceptions -fomit-frame-pointer -fno-math-errno -fno-trapping-math -fno-stack-protector \
-                   -pthread -DCONFIGURATION_FINAL -DNDEBUG -DCAISSA_VERSION=\"$(VERSION)\" -DCAISSA_DEFAULT_EVALFILE=\"$(notdir $(EVALFILE))\" -DARCHITECTURE_WASM
+                   -DCONFIGURATION_FINAL -DNDEBUG -DCAISSA_VERSION=\"$(VERSION)\" -DCAISSA_DEFAULT_EVALFILE=\"$(notdir $(EVALFILE))\" -DARCHITECTURE_WASM
 WASMSIMDFLAGS    = $(WASMFLAGS) -msimd128 -DUSE_WASM_SIMD
 WASMRELAXEDFLAGS = $(WASMSIMDFLAGS) -mrelaxed-simd -DUSE_WASM_RELAXED_SIMD
-WASMLINKFLAGS    = -sPROXY_TO_PTHREAD -sPTHREAD_POOL_SIZE=4 -sALLOW_MEMORY_GROWTH -Wno-pthreads-mem-growth \
-                   -sSTACK_SIZE=8MB -sDEFAULT_PTHREAD_STACK_SIZE=8MB
+WASMLINKFLAGS    = -sALLOW_MEMORY_GROWTH -sSTACK_SIZE=8MB
+ifeq ($(WASM_THREADS),ON)
+	WASMFLAGS     += -pthread
+	WASMLINKFLAGS += -sPROXY_TO_PTHREAD -sPTHREAD_POOL_SIZE=4 -Wno-pthreads-mem-growth -sDEFAULT_PTHREAD_STACK_SIZE=8MB
+else
+	WASMTHREADSUFFIX = -st
+endif
 ifeq ($(WASM_ENVIRONMENT),web)
 	WASMLINKFLAGS += -sENVIRONMENT=web,worker -sMODULARIZE -sEXPORT_ES6 -sEXPORT_NAME=createCaissa \
 	                 -sEXPORTED_RUNTIME_METHODS=ccall,FS -sINITIAL_MEMORY=128MB -sMAXIMUM_MEMORY=2GB
@@ -182,11 +192,11 @@ legacy: $(EVALFILE)
 neon: $(EVALFILE)
 	$(CC) $(SRC) -march=armv8-a+simd $(NEONFLAGS) -o $(EXE_NAME)-aarch64-neon$(EXT)
 wasm-simd: $(EVALFILE)
-	$(EMXX) $(SRC) $(WASMSIMDFLAGS) $(WASMLINKFLAGS) -o $(EXE_NAME)-wasm-simd$(WASMSUFFIX).js
+	$(EMXX) $(SRC) $(WASMSIMDFLAGS) $(WASMLINKFLAGS) -o $(EXE_NAME)-wasm-simd$(WASMTHREADSUFFIX)$(WASMSUFFIX).js
 wasm-relaxed: $(EVALFILE)
-	$(EMXX) $(SRC) $(WASMRELAXEDFLAGS) $(WASMLINKFLAGS) -o $(EXE_NAME)-wasm-relaxed$(WASMSUFFIX).js
+	$(EMXX) $(SRC) $(WASMRELAXEDFLAGS) $(WASMLINKFLAGS) -o $(EXE_NAME)-wasm-relaxed$(WASMTHREADSUFFIX)$(WASMSUFFIX).js
 wasm: $(EVALFILE)
-	$(EMXX) $(SRC) $(WASMFLAGS) $(WASMLINKFLAGS) -o $(EXE_NAME)-wasm$(WASMSUFFIX).js
+	$(EMXX) $(SRC) $(WASMFLAGS) $(WASMLINKFLAGS) -o $(EXE_NAME)-wasm$(WASMTHREADSUFFIX)$(WASMSUFFIX).js
 
 # Profile-guided optimization builds
 # native build like ob; phony because the profile directory has the same name

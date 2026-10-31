@@ -15,6 +15,12 @@
 #include <string.h>
 #include <thread>
 
+// WebAssembly without threads (no SharedArrayBuffer): the caller's thread searches, so "go" returns
+// once the search is done, and each UciCommand() runs its command right away
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    #define UCI_SINGLE_THREADED
+#endif
+
 #if defined(__EMSCRIPTEN__)
     #include <emscripten/emscripten.h>
 #endif // __EMSCRIPTEN__
@@ -74,7 +80,11 @@ static const uint32_t c_DefaultTTSize = 1024 * 1024 * c_DefaultTTSizeInMB;
 #ifdef USE_GAVIOTA_TABLEBASES
 static const uint32_t c_DefaultGaviotaTbCacheInMB = 64;
 #endif // USE_GAVIOTA_TABLEBASES
+#ifdef UCI_SINGLE_THREADED
+static const uint32_t c_MaxNumThreads = 1;
+#else
 static const uint32_t c_MaxNumThreads = 1024;
+#endif // UCI_SINGLE_THREADED
 
 struct UniversalChessInterface::SearchThread
 {
@@ -83,7 +93,25 @@ struct UniversalChessInterface::SearchThread
     std::condition_variable newSearchConditionVariable;
 };
 
-#if defined(__EMSCRIPTEN__)
+#if defined(UCI_SINGLE_THREADED)
+
+static UniversalChessInterface* s_interface = nullptr;
+
+// Nothing waits for commands without threads: the host's call runs it
+extern "C" EMSCRIPTEN_KEEPALIVE void UciCommand(const char* command)
+{
+    if (s_interface && !s_interface->ExecuteCommand(command))
+    {
+        // the runtime was kept alive for commands; "quit" ends it
+        UnloadTablebase();
+        emscripten_force_exit(0);
+    }
+
+    // send the replies before returning to the host, as ReadLine() does before waiting
+    fflush(stdout);
+}
+
+#elif defined(__EMSCRIPTEN__)
 
 // WebAssembly hosts (Node.js, browsers) pass commands in with UciCommand() instead of stdin: a
 // blocking read would tie up the JavaScript thread that the output of every thread goes through.
@@ -101,6 +129,8 @@ extern "C" EMSCRIPTEN_KEEPALIVE void UciCommand(const char* command)
 }
 
 #endif // __EMSCRIPTEN__
+
+#ifndef UCI_SINGLE_THREADED
 
 // reads a line from stdin without the line terminator, returns false at the end of input
 // (WebAssembly: waits for the next command from UciCommand())
@@ -134,10 +164,14 @@ static bool ReadLine(String& outLine)
 #endif // __EMSCRIPTEN__
 }
 
+#endif // UCI_SINGLE_THREADED
+
 UniversalChessInterface::UniversalChessInterface()
 {
+#ifndef UCI_SINGLE_THREADED
     mSearchThread = new SearchThread;
     mSearchThread->thread = std::thread(&UniversalChessInterface::SearchThreadEntryFunc, this);
+#endif // UCI_SINGLE_THREADED
 
     mGame.Reset(Position(Position::InitPositionFEN));
     mTranspositionTable.Resize(c_DefaultTTSize);
@@ -189,6 +223,10 @@ void UniversalChessInterface::Loop(int argc, const char* argv[])
         }
     }
 
+#ifdef UCI_SINGLE_THREADED
+    // later commands come from UciCommand()
+    s_interface = this;
+#else
     String str;
 
     while (ReadLine(str))
@@ -200,6 +238,7 @@ void UniversalChessInterface::Loop(int argc, const char* argv[])
     }
 
     UnloadTablebase();
+#endif // UCI_SINGLE_THREADED
 }
 
 static void ParseCommandString(const char* str, CommandArgs& outArgList)
@@ -259,7 +298,9 @@ bool UniversalChessInterface::ExecuteCommand(const char* commandString)
         printf("option name MultiPV type spin default 1 min 1 max %u\n", MaxAllowedMoves);
         printf("option name MoveOverhead type spin default %d min 0 max 10000\n", mOptions.moveOverhead);
         printf("option name Threads type spin default 1 min 1 max %u\n", c_MaxNumThreads);
+#ifndef UCI_SINGLE_THREADED
         printf("option name Ponder type check default false\n");
+#endif // UCI_SINGLE_THREADED
         printf("option name EvalFile type string default %s\n", c_DefaultEvalFile);
         printf("option name EvalRandomization type spin default 0 min 0 max 100\n");
 #ifdef USE_SYZYGY_TABLEBASES
@@ -680,6 +721,19 @@ bool UniversalChessInterface::Command_Go(const CommandArgs& args)
         }
     }
 
+#ifdef UCI_SINGLE_THREADED
+    // nothing can stop a search without threads ("stop" and "ponderhit" wait for it to end), so
+    // pondering searches like any other search, and a search needs a limit that ends it
+    isPonder = false;
+    const int32_t remainingTime = mGame.GetSideToMove() == White ? whiteRemainingTime : blacksRemainingTime;
+    if (isInfinite || (maxDepth == UINT32_MAX && maxNodes == UINT64_MAX && maxNodesSoft == UINT64_MAX &&
+                       moveTime == INT32_MAX && remainingTime == INT32_MAX && mateSearchDepth == 0))
+    {
+        printf("info string without threads a search needs a limit: depth, nodes, mate, movetime or a clock\n");
+        return true;
+    }
+#endif // UCI_SINGLE_THREADED
+
     ASSERT(!mSearchCtx);
     mSearchCtx = new SearchTaskContext(mTranspositionTable);
 
@@ -735,6 +789,9 @@ bool UniversalChessInterface::Command_Go(const CommandArgs& args)
     mSearchCtx->searchParam.colorConsoleOutput = mOptions.colorConsoleOutput;
     mSearchCtx->searchParam.showWDL = mOptions.showWDL;
 
+#ifdef UCI_SINGLE_THREADED
+    DoSearch();
+#else
     {
         std::unique_lock<std::mutex> lock(mSearchThread->mutex);
         mNewSearchContext = mSearchCtx;
@@ -744,6 +801,7 @@ bool UniversalChessInterface::Command_Go(const CommandArgs& args)
     // make sure search thread actually started running before exiting from this function
     while (!mSearchCtx->searchStarted.load(std::memory_order_acquire))
         ;
+#endif // UCI_SINGLE_THREADED
 
     if (waitForSearch)
     {
@@ -755,12 +813,14 @@ bool UniversalChessInterface::Command_Go(const CommandArgs& args)
 
 void UniversalChessInterface::StopSearchThread()
 {
+#ifndef UCI_SINGLE_THREADED
     {
         std::unique_lock<std::mutex> lock(mSearchThread->mutex);
         mStopSearchThread = true;
         mSearchThread->newSearchConditionVariable.notify_one();
     }
     mSearchThread->thread.join();
+#endif // UCI_SINGLE_THREADED
 }
 
 void UniversalChessInterface::SearchThreadEntryFunc()
@@ -1675,6 +1735,11 @@ bool UniversalChessInterface::Command_Benchmark(uint32_t depth)
 
 bool UniversalChessInterface::Command_Playout(const CommandArgs& args)
 {
+#ifdef UCI_SINGLE_THREADED
+    // playouts run on worker threads
+    (void)args;
+    printf("info string playout needs threads\n");
+#else
     uint64_t softNodeLimit = 0;
     uint64_t maxGames = 0;
     bool validArgs = true;
@@ -1703,6 +1768,7 @@ bool UniversalChessInterface::Command_Playout(const CommandArgs& args)
         delete mPlayout;
         mPlayout = nullptr;
     }
+#endif // UCI_SINGLE_THREADED
 
     return true;
 }
@@ -1713,8 +1779,20 @@ int main(int argc, const char* argv[])
 
     InitEngine();
 
+#ifdef UCI_SINGLE_THREADED
+    // the interface outlives main(): UciCommand() uses it until "quit"
+    static UniversalChessInterface uci;
+    uci.Loop(argc, argv);
+    // unless the command line ended the program (e.g. "bench")
+    if (s_interface)
+    {
+        fflush(stdout);
+        emscripten_exit_with_live_runtime();
+    }
+#else
     UniversalChessInterface uci;
     uci.Loop(argc, argv);
+#endif // UCI_SINGLE_THREADED
 
     return 0;
 }

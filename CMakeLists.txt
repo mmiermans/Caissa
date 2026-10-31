@@ -11,6 +11,7 @@ add_compile_definitions(CAISSA_VERSION="${CAISSA_VERSION}")
 
 option(USE_NUMA "Enable NUMA support via libnuma" ON)
 option(WASM_PROFILING "Keep function names in the WebAssembly binary for profilers" OFF)
+option(WASM_THREADS "WebAssembly with threads (needs SharedArrayBuffer); OFF searches on one thread" ON)
 set(WASM_ENVIRONMENT "node" CACHE STRING "Where WebAssembly builds run: node or web")
 set_property(CACHE WASM_ENVIRONMENT PROPERTY STRINGS node web)
 if (EMSCRIPTEN AND NOT WASM_ENVIRONMENT MATCHES "^(node|web)$")
@@ -166,7 +167,7 @@ message(STATUS "Current architecture: ${TARGET_ARCH}")
 
 
 # WebAssembly threads need every object compiled for shared memory
-if (EMSCRIPTEN)
+if (EMSCRIPTEN AND WASM_THREADS)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread")
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pthread")
 endif()
