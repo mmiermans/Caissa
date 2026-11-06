@@ -136,7 +136,7 @@ DEFINE_PARAM(CorrHistMaxBonus, 249, 128, 512);
 DEFINE_PARAM(CorrHistGravity, 1024, 512, 2048);
 DEFINE_PARAM(CorrHistBonusDiv, 4, 1, 8);
 
-DEFINE_PARAM(TTCutoffHalfMoveLimit, 80, 60, 99);
+DEFINE_PARAM(TTCutoffHalfMoveLimit, 100, 60, 100);
 DEFINE_PARAM(AlphaImprovementMinDepth, 2, 1, 6);
 DEFINE_PARAM(QuietHistMaxScoreDiff, 256, 64, 512);
 DEFINE_PARAM(PriorCMHBonusCap, 1200, 400, 2400);
